@@ -162,5 +162,5 @@ sudo certbot --apache
 ### 6. Recursos adicionales
 
 - **Warmup:** https://github.com/lsantire/tap-warmup
-- **Crear usuarios:** https://github.com/elsantodel90/icpc-latam-user-mgmt (repo externo; clonado localmente en `externals/icpc-latam-user-mgmt`, no versionado acá)
+- **Crear usuarios:** https://github.com/elsantodel90/icpc-latam-user-mgmt (repo externo; se clona en `externals/icpc-latam-user-mgmt` con `scripts/clone-externals.sh`, no versionado acá)
 - **`score.sep`:** para configurar scoreboards.
