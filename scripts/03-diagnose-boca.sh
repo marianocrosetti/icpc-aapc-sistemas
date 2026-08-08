@@ -17,7 +17,16 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-aapc-sistemas-tap}"
 ZONE="${ZONE:-us-central1-a}"
 VM_NAME="${VM_NAME:-boca-main}"
+MAIN_VM="${MAIN_VM:-boca-main}"
 CONTEST="${CONTEST:-1}"
+
+# La main no juzga por diseño (web + base solamente), así que ahí "no corre el autojudge" es el
+# estado correcto y no un problema. En las judges es lo contrario.
+if [[ "$VM_NAME" == "$MAIN_VM" ]]; then
+  EXPECTS_AUTOJUDGE="${EXPECTS_AUTOJUDGE:-false}"
+else
+  EXPECTS_AUTOJUDGE="${EXPECTS_AUTOJUDGE:-true}"
+fi
 
 log() { printf '\n\033[1;34m▸ %s\033[0m\n' "$*"; }
 
@@ -38,6 +47,7 @@ gcloud compute ssh "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" \
   --strict-host-key-checking=no --command="
 set -u
 CONTEST=$CONTEST
+EXPECTS_AUTOJUDGE=$EXPECTS_AUTOJUDGE
 cd /tmp
 
 echo '=== SISTEMA ==='
@@ -57,11 +67,36 @@ fi
 if mount | grep -q /home/bocajail; then
   echo \"  montajes:  \$(mount | grep -o '/home/bocajail[^ ]*' | tr '\n' ' ')\"
 fi
-if sudo pgrep -f boca-autojudge >/dev/null 2>&1; then
-  echo '  proceso:   OK (corriendo)'
-else
+# El que juzga de verdad es 'php autojudging.php'; 'boca-autojudge' es solo el wrapper de bash.
+# Hay que mirar los dos: si matás el wrapper con pkill, el worker php queda huerfano y SIGUE
+# juzgando, con lo cual mirar solo el wrapper da un falso 'no corre'.
+#
+# Se usa 'pgrep -x -f' (match EXACTO de la linea de comandos completa) porque este script
+# menciona esos nombres en sus propios mensajes: con 'pgrep -f' a secas se matchea a si mismo y
+# reporta procesos que no existen.
+# 'pgrep -c' imprime 0 y ADEMAS sale con codigo 1 cuando no encuentra nada, asi que un
+# '|| echo 0' duplicaria la salida. Contar lineas siempre sale bien.
+WRAPPER=\$(sudo pgrep -x -f '/bin/bash /usr/sbin/boca-autojudge' 2>/dev/null | wc -l)
+WORKER=\$(sudo pgrep -x -f 'php autojudging.php' 2>/dev/null | wc -l)
+echo \"  wrapper (boca-autojudge): \$WRAPPER   worker (php autojudging.php): \$WORKER\"
+if [ \"\$WORKER\" -gt 0 ] && [ \"\$WRAPPER\" -gt 0 ]; then
+  if [ \"\$EXPECTS_AUTOJUDGE\" = true ]; then
+    echo '  proceso:   OK (corriendo)'
+  else
+    echo '  proceso:   *** ESTA JUZGANDO Y NO DEBERIA *** (esta maquina es solo web + base)'
+    echo \"             sudo pkill -x -f '/bin/bash /usr/sbin/boca-autojudge'\"
+    echo \"             sudo pkill -x -f 'php autojudging.php'\"
+  fi
+elif [ \"\$WORKER\" -gt 0 ]; then
+  echo '  proceso:   worker php HUERFANO (sin wrapper): sigue juzgando, pero no se reinicia solo'
+  echo \"             para detenerlo de verdad: sudo pkill -x -f 'php autojudging.php'\"
+elif [ \"\$WRAPPER\" -gt 0 ]; then
+  echo '  proceso:   wrapper vivo pero sin worker php: revisar /tmp/autojudge.log'
+elif [ \"\$EXPECTS_AUTOJUDGE\" = true ]; then
   echo '  proceso:   *** NO CORRE *** -> correr:'
   echo \"             sudo bash -c 'nohup setsid boca-autojudge > /tmp/autojudge.log 2>&1 < /dev/null &'\"
+else
+  echo '  proceso:   no corre, y esta bien: esta maquina es solo web + base, no juzga'
 fi
 echo '  (recordar: boca-autojudge NO es un servicio de systemd, no sobrevive un reboot)'
 echo '  compiladores en el jail:'

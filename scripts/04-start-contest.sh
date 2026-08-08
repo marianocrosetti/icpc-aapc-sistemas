@@ -7,21 +7,22 @@
 #
 # Idempotente: se puede correr varias veces. Si algo ya está prendido o corriendo, no lo toca.
 #
+# La arquitectura es: UNA main (web + base, no juzga nunca) y N máquinas judge que corren el
+# autojudge y se conectan a la base de la main por red. La main no corre autojudge ni siquiera
+# como respaldo: juzgar es la parte que consume CPU y no querés que compita con la web justo
+# cuando todos los equipos están enviando.
+#
 # Uso:
 #   ./04-start-contest.sh                            # main + boca-judge-1
 #   JUDGES="boca-judge-1 boca-judge-2" ./04-start-contest.sh
-#   JUDGES="" ./04-start-contest.sh                  # solo la main, con su autojudge local
 
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-aapc-sistemas-tap}"
 ZONE="${ZONE:-us-central1-a}"
 MAIN_VM="${MAIN_VM:-boca-main}"
-# Máquinas judge dedicadas. Vacío = el autojudge corre en la main.
+# Máquinas judge. Se pueden agregar más: cada una se crea con 02-setup-judge-vm.sh.
 JUDGES="${JUDGES-boca-judge-1}"
-# Correr también un autojudge en la main, además de los judges dedicados.
-# Por defecto no, para no competir con los judges dedicados por el mismo trabajo.
-AUTOJUDGE_ON_MAIN="${AUTOJUDGE_ON_MAIN:-false}"
 
 log()  { printf '\n\033[1;34m▸ %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*"; }
@@ -60,9 +61,18 @@ wait_for_ssh() {
 }
 
 # Arranca boca-autojudge si no está corriendo.
-# El patrón 'boca-auto[j]udge' evita que pgrep/pkill matcheen su propio comando: sin los
-# corchetes, el `bash -c` que ejecuta esto contiene el string y se auto-matchea (y con pkill
-# eso mata la propia sesión de SSH).
+#
+# Dos sutilezas, las dos aprendidas a golpes:
+#
+# 1) El que juzga de verdad es `php autojudging.php`, hijo del wrapper `boca-autojudge`. Hay que
+#    chequear el worker y no sólo el wrapper: si alguien mató el wrapper con pkill, el worker
+#    queda huérfano (reparentado a init) y SIGUE juzgando. Arrancar otro encima daría dos
+#    autojudges compitiendo por el mismo trabajo.
+#
+# 2) Se usa `pgrep -x -f` (match EXACTO de la línea de comandos completa). Con `pgrep -f` a secas
+#    el patrón matchea el propio `bash -c` que ejecuta este bloque, porque el texto del script
+#    contiene esos nombres: da falsos positivos. Y con `pkill -f` es peor, porque mata su propia
+#    sesión de SSH y aborta con "return code [255]", como si la VM se hubiera caído.
 start_autojudge() {
   local vm="$1"
   gssh "$vm" '
@@ -70,12 +80,17 @@ start_autojudge() {
       echo "  *** falta el jail: correr sudo boca-createjail (tarda 5-10 min) ***"
       exit 1
     fi
-    if sudo pgrep -f "boca-auto[j]udge" >/dev/null 2>&1; then
-      echo "  autojudge: ya estaba corriendo"
+    if sudo pgrep -x -f "php autojudging.php" >/dev/null 2>&1; then
+      if sudo pgrep -x -f "/bin/bash /usr/sbin/boca-autojudge" >/dev/null 2>&1; then
+        echo "  autojudge: ya estaba corriendo"
+      else
+        echo "  autojudge: ya corría un worker php HUERFANO (sin wrapper); no arranco otro"
+        echo "             para reiniciarlo limpio: sudo pkill -x -f \"php autojudging.php\""
+      fi
     else
       sudo bash -c "nohup setsid boca-autojudge > /tmp/autojudge.log 2>&1 < /dev/null &"
       sleep 8
-      if sudo pgrep -f "boca-auto[j]udge" >/dev/null 2>&1; then
+      if sudo pgrep -x -f "php autojudging.php" >/dev/null 2>&1; then
         echo "  autojudge: arrancado"
       else
         echo "  *** el autojudge no quedó corriendo, ver /tmp/autojudge.log ***"
@@ -87,6 +102,12 @@ start_autojudge() {
 }
 
 # ---------------------------------------------------------------- main
+
+if [[ -z "${JUDGES// /}" ]]; then
+  warn "No hay máquinas judge en JUDGES, y la main no juzga por diseño: nadie evaluaría los"
+  warn "envíos y quedarían todos en 'openrun'. Creá una con 02-setup-judge-vm.sh."
+  exit 1
+fi
 
 log "Encendiendo VMs"
 start_vm "$MAIN_VM"
@@ -103,19 +124,25 @@ gssh "$MAIN_VM" '
   echo "  web:        HTTP $(curl -s -o /dev/null -w "%{http_code}" http://localhost/boca/)"
 '
 
-if [[ -n "$JUDGES" ]]; then
-  for j in $JUDGES; do
-    log "Autojudge en $j (judge dedicado)"
-    start_autojudge "$j"
-  done
-  if [[ "$AUTOJUDGE_ON_MAIN" == "true" ]]; then
-    log "Autojudge en $MAIN_VM (además de los dedicados)"
-    start_autojudge "$MAIN_VM"
+for j in $JUDGES; do
+  log "Autojudge en $j"
+  start_autojudge "$j"
+done
+
+# La main no debería estar juzgando. Si quedó un autojudge suelto ahí (por ejemplo de una prueba),
+# avisar: no es fatal, pero le come CPU a la web y confunde el diagnóstico.
+log "Verificando que $MAIN_VM NO esté juzgando"
+gssh "$MAIN_VM" '
+  N=$(sudo pgrep -x -f "php autojudging.php" | wc -l)
+  if [ "$N" -gt 0 ]; then
+    echo "  ! hay $N autojudge(s) corriendo en la main, que no debería juzgar."
+    echo "  ! para apagarlo:"
+    echo "  !   sudo pkill -x -f \"/bin/bash /usr/sbin/boca-autojudge\""
+    echo "  !   sudo pkill -x -f \"php autojudging.php\""
+  else
+    echo "  OK: la main no juzga, solo web + base"
   fi
-else
-  log "Autojudge en $MAIN_VM (no hay judges dedicados)"
-  start_autojudge "$MAIN_VM"
-fi
+'
 
 EXTERNAL_IP=$(gcloud compute instances describe "$MAIN_VM" --zone="$ZONE" --project="$PROJECT_ID" \
   --format='value(networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null || echo '?')

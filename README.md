@@ -14,22 +14,26 @@ dejarlo funcionando es un comando:
 ./scripts/05-stop-contest.sh      # apaga las VMs
 ```
 
-Variantes de arquitectura (BOCA soporta las dos):
+La arquitectura es **una main que corre web + base y no juzga nunca, más N máquinas judge** que
+corren el autojudge y se conectan a la base de la main por red. Juzgar consume CPU y no conviene
+que compita con el servidor web justo cuando todos los equipos están enviando. Escalar es agregar
+judges:
 
 ```bash
-# Judges dedicados (default): el autojudge corre en boca-judge-1, no en la main
-./scripts/04-start-contest.sh
-
-# Varios judges dedicados, para más capacidad de juzgado
 JUDGES="boca-judge-1 boca-judge-2" ./scripts/04-start-contest.sh
-
-# Todo en una sola máquina: el autojudge corre en la main
-JUDGES="" ./scripts/04-start-contest.sh
 ```
 
-> **Lo único que hay que recordar:** los autojudges **no sobreviven un reboot**. Si reiniciás
-> cualquier VM, volvé a correr `04-start-contest.sh`. Si no, los envíos quedan en `openrun` sin
-> ningún error visible en la web.
+Dos cosas para recordar, las dos causa de envíos que se quedan en `openrun` sin ningún error
+visible en la web:
+
+> **Los autojudges no sobreviven un reboot.** No son servicios de systemd. Si reiniciás cualquier
+> VM, volvé a correr `04-start-contest.sh`.
+
+> **El autojudge son dos procesos**: el wrapper `boca-autojudge` y su hijo `php autojudging.php`,
+> que es el que realmente juzga. Si matás sólo el wrapper, el hijo queda huérfano y **sigue
+> juzgando**, así que nunca uses `pkill -f boca-autojudge` para apagarlo ni `pgrep` del wrapper
+> para saber si está corriendo. Ver
+> [session-2026-08-08 §8](./docs/session-2026-08-08.md#gotcha-grande-el-autojudge-son-dos-procesos-y-pkill--f-boca-autojudge-no-lo-detiene).
 
 Para hacer los pasos a mano, ver [§1 jail](#jail-del-autojudge-obligatorio-si-el-autojudge-va-a-correr-acá)
 y [§2.1](#21-arrancar-el-autojudge).
@@ -58,6 +62,9 @@ extensiones de `langtable` coinciden con las carpetas de los paquetes cargados.
 | C++ falla al juzgar | El paquete usa `cpp` (formato `box`) y BOCA espera `cc`. Los paquetes de `rbx` usan `cc` y no requieren cambios | [session-2026-08-08](./docs/session-2026-08-08.md#4-paquetes-rbx-vs-box-la-extensión-de-c) |
 | Kotlin no aparece o falla | No está en `langtable` **y** `kotlinc` no viene en el jail | idem |
 | El upload del paquete falla | Límites de PHP; sólo importa el `php.ini` de **fpm** | [§1 límites](#subir-problemas-pesados-aumentar-límites-de-php) |
+| Apagaste el autojudge pero los envíos se siguen juzgando | Mataste el wrapper y quedó vivo el hijo `php autojudging.php`, huérfano | [session-2026-08-08 §8](./docs/session-2026-08-08.md#gotcha-grande-el-autojudge-son-dos-procesos-y-pkill--f-boca-autojudge-no-lo-detiene) |
+| El diagnóstico dice que no corre el autojudge, pero sí corre (o al revés) | `pgrep -f` matchea el texto del propio script que pregunta; hay que usar `pgrep -x -f` | idem |
+| Querés saber qué máquina juzgó un run | `runtable.autoip` dice `local` siempre, incluso juzgando en remoto. Usar el log del autojudge | [session-2026-08-08 §8](./docs/session-2026-08-08.md#validación-del-juzgado-remoto-y-por-qué-autoip-no-sirve-para-saber-quién-juzgó) |
 
 ## Referencia 2025
 
