@@ -2,14 +2,47 @@
 
 Pasos para levantar la infraestructura del TAP (contest BOCA en Google Cloud). Ir refinando con cada edición.
 
+## Runbook: encender y apagar el contest
+
+Si la infraestructura **ya está instalada** (que es el caso desde abril 2026), prender todo y
+dejarlo funcionando es un comando:
+
+```bash
+./scripts/04-start-contest.sh     # prende las VMs y levanta los autojudges
+./scripts/03-diagnose-boca.sh     # verifica que todo quedó bien
+# ... el contest ...
+./scripts/05-stop-contest.sh      # apaga las VMs
+```
+
+Variantes de arquitectura (BOCA soporta las dos):
+
+```bash
+# Judges dedicados (default): el autojudge corre en boca-judge-1, no en la main
+./scripts/04-start-contest.sh
+
+# Varios judges dedicados, para más capacidad de juzgado
+JUDGES="boca-judge-1 boca-judge-2" ./scripts/04-start-contest.sh
+
+# Todo en una sola máquina: el autojudge corre en la main
+JUDGES="" ./scripts/04-start-contest.sh
+```
+
+> **Lo único que hay que recordar:** los autojudges **no sobreviven un reboot**. Si reiniciás
+> cualquier VM, volvé a correr `04-start-contest.sh`. Si no, los envíos quedan en `openrun` sin
+> ningún error visible en la web.
+
+Para hacer los pasos a mano, ver [§1 jail](#jail-del-autojudge-obligatorio-si-el-autojudge-va-a-correr-acá)
+y [§2.1](#21-arrancar-el-autojudge).
+
 ## Antes de empezar
 
 Si retomás un setup existente, **empezá por el diagnóstico** en vez de asumir el estado que
-describen las bitácoras (ya pasó que quedaran desactualizadas a mitad de una sesión):
+describen las bitácoras (ya pasó dos veces que quedaran desactualizadas a mitad de una sesión, y
+que listaran como pendiente algo que en realidad ya estaba hecho):
 
 ```bash
-gcloud compute instances start boca-main --zone=us-central1-a --project=aapc-sistemas-tap
-./scripts/03-diagnose-boca.sh
+./scripts/03-diagnose-boca.sh                      # boca-main
+VM_NAME=boca-judge-1 ./scripts/03-diagnose-boca.sh # una judge
 ```
 
 Te dice si BOCA está corriendo, si existe el jail, si el autojudge está levantado, y si las
@@ -259,5 +292,10 @@ propio del paquete) en [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.
 | `01-setup-main-vm.sh` | Crea la VM main (web + BD) con IPs fijas y firewall HTTP. Idempotente |
 | `02-setup-judge-vm.sh` | Crea una VM judge con IP privada fija. Idempotente |
 | `03-diagnose-boca.sh` | Diagnóstico read-only del estado de un BOCA ya instalado |
+| `04-start-contest.sh` | Prende las VMs y levanta los autojudges. Idempotente |
+| `05-stop-contest.sh` | Apaga las VMs |
 | `build-boca-packages.sh` | Pipeline `box build` + `mpkg.py` para el problemset 2025 (formato viejo) |
 | `clone-externals.sh` | Clona los repos externos en `externals/` |
+
+Los scripts `01`–`02` son de **instalación** (una vez por edición); `03`–`05` son de **operación**
+(cada sesión).
