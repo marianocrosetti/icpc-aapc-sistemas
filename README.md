@@ -102,7 +102,9 @@ Durante la instalación pide:
 #### Jail del autojudge (obligatorio si el autojudge va a correr acá)
 
 `apt install boca` **no** crea el jail, y `boca-autojudge` se niega a arrancar sin él. Hay que
-correrlo explícitamente en toda máquina que vaya a juzgar, incluida la main:
+correrlo explícitamente en **toda máquina judge**. El paso sí está en las notas viejas, pero sólo
+en la sección de las judges y no en la de la main, y en ninguna estaba escrito qué se rompe si
+falta: los envíos quedan en `openrun` sin error visible en la web.
 
 ```bash
 # Tarda 5-10 min (debootstrap + compiladores) y termina en ~1.6 GB.
