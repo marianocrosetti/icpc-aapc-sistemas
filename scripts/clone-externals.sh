@@ -8,6 +8,7 @@ EXTERNALS_DIR="$REPO_ROOT/externals"
 # repo_url  carpeta_destino
 EXTERNALS=(
   "git@github.com:elsantodel90/icpc-latam-user-mgmt.git icpc-latam-user-mgmt"
+  "git@github.com:elsantodel90/tap-2025-problemset.git tap-2025-problemset"
 )
 
 mkdir -p "$EXTERNALS_DIR"
