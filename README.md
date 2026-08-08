@@ -51,7 +51,8 @@ nada**. Sólo hay que prender y levantar los autojudges.
 | Problemas | Cargados, empaquetados con `rbx` |
 | Usuarios | 210 importados del export CLICS (195 equipos + 14 staff + 1 admin) |
 | Juzgado | Validado end-to-end: C++11 → `YES` en ~4 s con el checker propio del paquete |
-| Lenguajes | C, C++11, Java, Python 3 funcionan. **Kotlin no** (falta en `langtable` y falta `kotlinc`); Python 2 aparece ofrecido pero no hay intérprete |
+| C++ | `g++ 11.4.0`, compilado con `-std=c++20 -O2 -lm -static`. `<ranges>` y `<bit>` verificados; `std::format` no existe |
+| Lenguajes | C, C++, Python 3 funcionan. **Kotlin no** (falta en `langtable` y falta `kotlinc`); Python 2 aparece ofrecido pero no hay intérprete; **Java sin verificar** (el `javac` del jail no arranca, `libjli.so`) |
 
 ## Antes de empezar
 
@@ -302,6 +303,21 @@ C++ dentro del paquete:
 BOCA. Con paquetes viejos de `box` sí, o C++ no compila. Validado end-to-end (incluido el checker
 propio del paquete) en [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.md).
 
+### Versión de C++ y flags
+
+**El estándar lo define el paquete, no BOCA**: los flags viven en el script `compile/cc` de cada
+`.zip`. Los paquetes de `rbx` compilan así, con el `g++ 11.4.0` del jail:
+
+```bash
+g++ -std=c++20 -O2 -lm -static
+```
+
+`-static` no es opcional: el script de ejecución aborta si el binario no quedó estático. Y ojo que
+`-std=c++20` no es C++20 completo: `<ranges>` y `<bit>` andan bien, pero **`std::format` no está**
+(llega en g++ 13) ni `constexpr std::vector` (llega en libstdc++ 12). Para medirlo en vez de
+suponerlo: `scripts/06-check-cpp-features.sh`, con
+[el detalle acá](./docs/session-2026-08-08.md#qué-versión-de-c-se-compila-y-con-qué-flags).
+
 ## Bitácoras
 
 - [`docs/session-2026-04-25.md`](./docs/session-2026-04-25.md) — bootstrap de GCP, VM main, paquetes del problemset 2025. **Su checklist de pendientes quedó desactualizada**: se escribió antes de terminar la sesión.
@@ -318,6 +334,7 @@ propio del paquete) en [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.
 | `03-diagnose-boca.sh` | Diagnóstico read-only del estado de un BOCA ya instalado |
 | `04-start-contest.sh` | Prende las VMs y levanta los autojudges. Idempotente |
 | `05-stop-contest.sh` | Apaga las VMs |
+| `06-check-cpp-features.sh` | Mide qué features de C++ soporta de verdad el compilador del jail, con los flags reales del paquete. Se corre en un contenedor o dentro del jail |
 | `build-boca-packages.sh` | Pipeline `box build` + `mpkg.py` para el problemset 2025 (formato viejo) |
 | `clone-externals.sh` | Clona los repos externos en `externals/` |
 
