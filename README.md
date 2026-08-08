@@ -35,8 +35,23 @@ visible en la web:
 > para saber si está corriendo. Ver
 > [session-2026-08-08 §8](./docs/session-2026-08-08.md#gotcha-grande-el-autojudge-son-dos-procesos-y-pkill--f-boca-autojudge-no-lo-detiene).
 
-Para hacer los pasos a mano, ver [§1 jail](#jail-del-autojudge-obligatorio-si-el-autojudge-va-a-correr-acá)
+Para hacer los pasos a mano, ver [§2 jail](#jail-del-autojudge-obligatorio-en-toda-judge)
 y [§2.1](#21-arrancar-el-autojudge).
+
+### Estado verificado al 2026-08-08
+
+Para no volver a auditar desde cero: esto ya está hecho y probado, **no hace falta reinstalar
+nada**. Sólo hay que prender y levantar los autojudges.
+
+| | Estado |
+|---|---|
+| `boca-main` (`e2-medium`) | Apache + PHP 8.1-fpm + Postgres 14 + BOCA 1.5.21. Sin jail y sin autojudge, **a propósito** |
+| `boca-judge-1` (`c2d-highcpu-2`) | BOCA 1.5.21, jail listo (1.6 GB), apunta a la base de la main por IP interna |
+| Contest | `Contest-test` (contestnumber 1), activo |
+| Problemas | Cargados, empaquetados con `rbx` |
+| Usuarios | 210 importados del export CLICS (195 equipos + 14 staff + 1 admin) |
+| Juzgado | Validado end-to-end: C++11 → `YES` en ~4 s con el checker propio del paquete |
+| Lenguajes | C, C++11, Java, Python 3 funcionan. **Kotlin no** (falta en `langtable` y falta `kotlinc`); Python 2 aparece ofrecido pero no hay intérprete |
 
 ## Antes de empezar
 
@@ -57,7 +72,7 @@ extensiones de `langtable` coinciden con las carpetas de los paquetes cargados.
 | Síntoma | Causa | Dónde |
 |---|---|---|
 | Los envíos quedan en `openrun`, sin error en la web | El autojudge no está corriendo. **No es un servicio de systemd**, hay que levantarlo a mano después de cada boot | [§2.1](#21-arrancar-el-autojudge) |
-| `boca-autojudge` dice `Bocajail not found` | Nunca se corrió `boca-createjail` en esa máquina | [§1 jail](#jail-del-autojudge-obligatorio-si-el-autojudge-va-a-correr-acá) |
+| `boca-autojudge` dice `Bocajail not found` | Nunca se corrió `boca-createjail` en esa máquina | [§2 jail](#jail-del-autojudge-obligatorio-en-toda-judge) |
 | `boca-createjail` dice `/bocajail/proc seems to be mounted` | Una corrida previa se interrumpió y dejó `/proc` montado | [session-2026-08-08](./docs/session-2026-08-08.md#gotcha-si-se-interrumpe-queda-proc-montado-y-no-se-puede-reintentar) |
 | C++ falla al juzgar | El paquete usa `cpp` (formato `box`) y BOCA espera `cc`. Los paquetes de `rbx` usan `cc` y no requieren cambios | [session-2026-08-08](./docs/session-2026-08-08.md#4-paquetes-rbx-vs-box-la-extensión-de-c) |
 | Kotlin no aparece o falla | No está en `langtable` **y** `kotlinc` no viene en el jail | idem |
@@ -99,31 +114,8 @@ Durante la instalación pide:
 - **Sobreescribir versión de Postgres:** sí
 - **Crear nueva base de datos:** sí
 
-#### Jail del autojudge (obligatorio si el autojudge va a correr acá)
-
-`apt install boca` **no** crea el jail, y `boca-autojudge` se niega a arrancar sin él. Hay que
-correrlo explícitamente en **toda máquina judge**. El paso sí está en las notas viejas, pero sólo
-en la sección de las judges y no en la de la main, y en ninguna estaba escrito qué se rompe si
-falta: los envíos quedan en `openrun` sin error visible en la web.
-
-```bash
-# Tarda 5-10 min (debootstrap + compiladores) y termina en ~1.6 GB.
-# Desatachado para que no lo corte una desconexión de SSH:
-sudo bash -c 'nohup setsid boca-createjail > /tmp/createjail.log 2>&1 < /dev/null &'
-sudo tail -f /tmp/createjail.log
-```
-
-Verificar que quedó completo:
-
-```bash
-schroot -l    # debe listar chroot:bocajail
-for b in gcc g++ javac java python3; do
-  printf '%-9s %s\n' "$b" "$(sudo chroot /home/bocajail which $b 2>/dev/null || echo NO)"
-done
-```
-
-Después, arrancar el autojudge (ver [§2.1](#21-arrancar-el-autojudge)). Detalles, gotchas y cómo
-recuperarse de un `boca-createjail` interrumpido: [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.md).
+> Esta máquina **no** necesita el jail del autojudge y **no** debe correr `boca-createjail`: no
+> juzga. El jail va sólo en las judges, [§2](#2-instancia-máquina-judge-auto-judge).
 
 #### Verificación
 
@@ -188,9 +180,32 @@ Durante la instalación pide:
 - **Password:** la password usada al crear la BD previamente.
 - **Crear nueva base de datos:** **NO**.
 
+#### Jail del autojudge (obligatorio en toda judge)
+
+`apt install boca` **no** crea el jail, y `boca-autojudge` se niega a arrancar sin él, con
+`Bocajail not found`. El paso está en las notas viejas, pero no lo que se rompe si falta: los
+envíos quedan en `openrun` sin ningún error visible en la web.
+
 ```bash
-sudo boca-createjail
+# Tarda 5-10 min (debootstrap + compiladores) y termina en ~1.6 GB.
+# Desatachado para que no lo corte una desconexión de SSH:
+sudo bash -c 'nohup setsid boca-createjail > /tmp/createjail.log 2>&1 < /dev/null &'
+sudo tail -f /tmp/createjail.log
 ```
+
+Verificar que quedó completo. El `chroot` es importante: preguntar desde el host da falsos
+negativos en `java`/`javac`, porque son symlinks a `/etc/alternatives` que sólo resuelven adentro.
+
+```bash
+schroot -l    # debe listar chroot:bocajail
+for b in gcc g++ javac java python3; do
+  printf '%-9s %s\n' "$b" "$(sudo chroot /home/bocajail which $b 2>/dev/null || echo NO)"
+done
+```
+
+Si se interrumpe a mitad de camino queda `/proc` montado adentro y no se puede reintentar ni
+borrar; cómo recuperarse está en
+[session-2026-08-08](./docs/session-2026-08-08.md#gotcha-si-se-interrumpe-queda-proc-montado-y-no-se-puede-reintentar).
 
 ### 2.1 Arrancar el autojudge
 
