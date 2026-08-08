@@ -2,6 +2,30 @@
 
 Pasos para levantar la infraestructura del TAP (contest BOCA en Google Cloud). Ir refinando con cada edición.
 
+## Antes de empezar
+
+Si retomás un setup existente, **empezá por el diagnóstico** en vez de asumir el estado que
+describen las bitácoras (ya pasó que quedaran desactualizadas a mitad de una sesión):
+
+```bash
+gcloud compute instances start boca-main --zone=us-central1-a --project=aapc-sistemas-tap
+./scripts/03-diagnose-boca.sh
+```
+
+Te dice si BOCA está corriendo, si existe el jail, si el autojudge está levantado, y si las
+extensiones de `langtable` coinciden con las carpetas de los paquetes cargados.
+
+### Trampas conocidas
+
+| Síntoma | Causa | Dónde |
+|---|---|---|
+| Los envíos quedan en `openrun`, sin error en la web | El autojudge no está corriendo. **No es un servicio de systemd**, hay que levantarlo a mano después de cada boot | [§2.1](#21-arrancar-el-autojudge) |
+| `boca-autojudge` dice `Bocajail not found` | Nunca se corrió `boca-createjail` en esa máquina | [§1 jail](#jail-del-autojudge-obligatorio-si-el-autojudge-va-a-correr-acá) |
+| `boca-createjail` dice `/bocajail/proc seems to be mounted` | Una corrida previa se interrumpió y dejó `/proc` montado | [session-2026-08-08](./docs/session-2026-08-08.md#gotcha-si-se-interrumpe-queda-proc-montado-y-no-se-puede-reintentar) |
+| C++ falla al juzgar | El paquete usa `cpp` (formato `box`) y BOCA espera `cc`. Los paquetes de `rbx` usan `cc` y no requieren cambios | [session-2026-08-08](./docs/session-2026-08-08.md#4-paquetes-rbx-vs-box-la-extensión-de-c) |
+| Kotlin no aparece o falla | No está en `langtable` **y** `kotlinc` no viene en el jail | idem |
+| El upload del paquete falla | Límites de PHP; sólo importa el `php.ini` de **fpm** | [§1 límites](#subir-problemas-pesados-aumentar-límites-de-php) |
+
 ## Referencia 2025
 
 ### Infraestructura: Google Cloud
@@ -34,6 +58,30 @@ Durante la instalación pide:
 - **Password (generar nueva):** `J553wdSKvXAkhNVK4iLO`
 - **Sobreescribir versión de Postgres:** sí
 - **Crear nueva base de datos:** sí
+
+#### Jail del autojudge (obligatorio si el autojudge va a correr acá)
+
+`apt install boca` **no** crea el jail, y `boca-autojudge` se niega a arrancar sin él. Hay que
+correrlo explícitamente en toda máquina que vaya a juzgar, incluida la main:
+
+```bash
+# Tarda 5-10 min (debootstrap + compiladores) y termina en ~1.6 GB.
+# Desatachado para que no lo corte una desconexión de SSH:
+sudo bash -c 'nohup setsid boca-createjail > /tmp/createjail.log 2>&1 < /dev/null &'
+sudo tail -f /tmp/createjail.log
+```
+
+Verificar que quedó completo:
+
+```bash
+schroot -l    # debe listar chroot:bocajail
+for b in gcc g++ javac java python3; do
+  printf '%-9s %s\n' "$b" "$(sudo chroot /home/bocajail which $b 2>/dev/null || echo NO)"
+done
+```
+
+Después, arrancar el autojudge (ver [§2.1](#21-arrancar-el-autojudge)). Detalles, gotchas y cómo
+recuperarse de un `boca-createjail` interrumpido: [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.md).
 
 #### Verificación
 
@@ -102,6 +150,22 @@ Durante la instalación pide:
 sudo boca-createjail
 ```
 
+### 2.1 Arrancar el autojudge
+
+**`boca-autojudge` no es un servicio de systemd.** No hay unit file, no arranca al bootear, y no
+sobrevive un reboot. Hay que levantarlo a mano en cada máquina que juzgue, cada vez que se
+prende:
+
+```bash
+sudo bash -c 'nohup setsid boca-autojudge > /tmp/autojudge.log 2>&1 < /dev/null &'
+sudo tail -f /tmp/autojudge.log   # queda en "Nothing to do. Sleeping...."
+```
+
+Si esto falta, los envíos se quedan en estado `openrun` para siempre **sin ningún error visible
+en la web**: parece que el sistema está colgado. Es el error operativo más fácil de cometer.
+
+Además, como admin del contest hay que habilitar el checkbox de autojudge en la pestaña **Site**.
+
 ### 3. Conectar máquinas (web server ↔ judges)
 
 #### En la máquina MAIN (donde está la BD)
@@ -164,3 +228,36 @@ sudo certbot --apache
 - **Warmup:** https://github.com/lsantire/tap-warmup
 - **Crear usuarios:** https://github.com/elsantodel90/icpc-latam-user-mgmt (repo externo; se clona en `externals/icpc-latam-user-mgmt` con `scripts/clone-externals.sh`, no versionado acá)
 - **`score.sep`:** para configurar scoreboards.
+
+## Formato de los paquetes de problemas
+
+Desde 2026 los problemas se empaquetan con **`rbx`** (lo que usan la regional y la PDA), no con
+`box` (lo que se usó en 2025). Para BOCA la diferencia que importa es el nombre de la carpeta de
+C++ dentro del paquete:
+
+| | C++ | C | Java | Kotlin | Python |
+|---|---|---|---|---|---|
+| Paquete **`rbx`** | `cc` | `c` | `java` | `kt` | `py3` |
+| Paquete **`box`** / `mpkg.py` | `cpp` | `c` | `java` | `kt` | `py3` |
+| **BOCA** `langtable` (default) | `cc` | `c` | `java` | — | `py3` + `py2` |
+
+**Con `rbx` no hay que tocar la tabla de lenguajes para C++**, porque coincide con el default de
+BOCA. Con paquetes viejos de `box` sí, o C++ no compila. Validado end-to-end (incluido el checker
+propio del paquete) en [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.md).
+
+## Bitácoras
+
+- [`docs/session-2026-04-25.md`](./docs/session-2026-04-25.md) — bootstrap de GCP, VM main, paquetes del problemset 2025. **Su checklist de pendientes quedó desactualizada**: se escribió antes de terminar la sesión.
+- [`docs/session-2026-04-25-judge-vm.md`](./docs/session-2026-04-25-judge-vm.md) — creación de la VM judge.
+- [`docs/session-2026-04-25-users.md`](./docs/session-2026-04-25-users.md) — generación de usuarios desde el export CLICS.
+- [`docs/session-2026-08-08.md`](./docs/session-2026-08-08.md) — auditoría del estado real, el jail del autojudge, y validación de paquetes `rbx`.
+
+## Scripts
+
+| Script | Qué hace |
+|---|---|
+| `01-setup-main-vm.sh` | Crea la VM main (web + BD) con IPs fijas y firewall HTTP. Idempotente |
+| `02-setup-judge-vm.sh` | Crea una VM judge con IP privada fija. Idempotente |
+| `03-diagnose-boca.sh` | Diagnóstico read-only del estado de un BOCA ya instalado |
+| `build-boca-packages.sh` | Pipeline `box build` + `mpkg.py` para el problemset 2025 (formato viejo) |
+| `clone-externals.sh` | Clona los repos externos en `externals/` |
